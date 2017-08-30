@@ -7,6 +7,9 @@
          start_link/1, start_link/2, stop/1, status/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
+
+-export([inc_worker_size/2,dec_worker_size/2]).
+
 -export_type([pool/0]).
 
 -define(TIMEOUT, 5000).
@@ -38,8 +41,17 @@
     max_overflow = 10 :: non_neg_integer(),
     strategy = lifo :: lifo | fifo,
     overflow_check_period :: non_neg_integer(), %milliseconds
-    overflow_ttl = 0 :: non_neg_integer()   %microseconds
+    overflow_ttl = 0 :: non_neg_integer(),   %microseconds
+    worker_sizes = #{}
 }).
+
+inc_worker_size(Pool,Worker)->
+    gen_server:cast(Pool, {inc_worker_size, Worker})
+.
+
+dec_worker_size(Pool,Worker)->
+    gen_server:cast(Pool, {dec_worker_size, Worker})
+.
 
 -spec checkout(Pool :: pool()) -> pid().
 checkout(Pool) ->
@@ -180,6 +192,16 @@ handle_cast({cancel_waiting, CRef}, State) ->
             {noreply, State#state{waiting = Waiting}}
     end;
 
+handle_cast({inc_worker_size, Pid}, State = #state{worker_sizes = WS}) ->
+    Size = maps:get(Pid,WS,0),
+    {noreply, State#state{worker_sizes = WS#{Pid => Size + 1} }}
+;
+
+handle_cast({dec_worker_size, Pid}, State = #state{worker_sizes = WS}) ->
+    Size = maps:get(Pid,WS,0),
+    {noreply, State#state{worker_sizes = WS#{Pid => Size - 1} }}
+;
+
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -190,10 +212,10 @@ handle_call({checkout, CRef, Block}, {FromPid, _} = From, State) ->
            overflow = Overflow,
            max_overflow = MaxOverflow} = State,
     case Workers of
-        [{Pid, _} | Left] when State#state.overflow_ttl > 0 ->
+        [{Pid, _, _} | Left] when State#state.overflow_ttl > 0 ->
             add_worker_execute(Pid, CRef, FromPid, Monitors),
             {reply, Pid, State#state{workers = Left}};
-        [{Pid, _} | Left] ->
+        [{Pid, _, _} | Left] ->
             add_worker_execute(Pid, CRef, FromPid, Monitors),
             {reply, Pid, State#state{workers = Left}};
         [] when MaxOverflow > 0, Overflow < MaxOverflow ->
@@ -216,7 +238,7 @@ handle_call(status, _From, State) ->
     StateName = state_name(State),
     {reply, {StateName, length(Workers), Overflow, CheckedOutWorkers}, State};
 handle_call(get_avail_workers, _From, State = #state{workers = Workers}) ->
-    Pids = lists:map(fun({Pid, _TS}) -> Pid end, Workers),
+    Pids = lists:map(fun({Pid, _TS, _}) -> Pid end, Workers),
     {reply, Pids, State};
 handle_call(get_all_workers, _From, State) ->
     Sup = State#state.supervisor,
@@ -255,7 +277,7 @@ handle_info({'EXIT', Pid, _Reason}, State) ->
             case lists:keymember(Pid, 1, Workers) of
                 true ->
                     W = lists:keydelete(Pid, 1, Workers),
-                    {noreply, State#state{workers = [{new_worker(Sup), erlang:monotonic_time(micro_seconds)} | W]}};
+                    {noreply, State#state{workers = [{new_worker(Sup), erlang:monotonic_time(micro_seconds), 0} | W]}};
                 false ->
                     {noreply, State}
             end
@@ -274,7 +296,7 @@ handle_info(_Info, State) ->
     {noreply, State}.
 
 terminate(_Reason, #state{workers = Workers, supervisor = Sup}) ->
-    ok = lists:foreach(fun ({W, _}) -> unlink(W) end, Workers),
+    ok = lists:foreach(fun ({W, _, _}) -> unlink(W) end, Workers),
     true = exit(Sup, shutdown),
     ok.
 
@@ -306,14 +328,14 @@ prepopulate(N, Sup) ->
 prepopulate(0, _Sup, Workers) ->
     Workers;
 prepopulate(N, Sup, Workers) ->
-    prepopulate(N-1, Sup, [{new_worker(Sup), erlang:monotonic_time(micro_seconds)} | Workers]).
+    prepopulate(N-1, Sup, [{new_worker(Sup), erlang:monotonic_time(micro_seconds),0} | Workers]).
 
 handle_checkin(Pid, State) ->
     #state{supervisor = Sup,
            waiting = Waiting,
            monitors = Monitors,
            overflow = Overflow,
-           strategy = Strategy,
+           %strategy = Strategy,
            overflow_ttl = OverflowTtl} = State,
     case queue:out(Waiting) of
         {{value, {From, CRef, MRef}}, Left} ->
@@ -322,14 +344,14 @@ handle_checkin(Pid, State) ->
             State#state{waiting = Left};
         {empty, Empty} when Overflow > 0, OverflowTtl > 0 ->
             LastUseTime = erlang:monotonic_time(micro_seconds),
-            Workers = return_worker(Strategy, {Pid, LastUseTime}, State#state.workers),
+            Workers = return_worker({Pid, LastUseTime, maps:get(Pid,State#state.worker_sizes,0)}, State#state.workers),
             State#state{workers = Workers, waiting = Empty};
         {empty, Empty} when Overflow > 0 ->
             ok = dismiss_worker(Sup, Pid),
             State#state{waiting = Empty, overflow = Overflow - 1};
         {empty, Empty} ->
             LastUseTime = erlang:monotonic_time(micro_seconds),
-            Workers = return_worker(Strategy, {Pid, LastUseTime}, State#state.workers),
+            Workers = return_worker({Pid, LastUseTime, maps:get(Pid,State#state.worker_sizes,0)}, State#state.workers),
             State#state{workers = Workers, waiting = Empty, overflow = 0}
     end.
 
@@ -347,7 +369,7 @@ handle_worker_exit(Pid, State) ->
             State#state{overflow = Overflow - 1, waiting = Empty};
         {empty, Empty} ->
             Workers =
-                [{new_worker(Sup), erlang:monotonic_time(micro_seconds)}
+                [{new_worker(Sup), erlang:monotonic_time(micro_seconds), 0}
                  | lists:filter(fun (P) -> P =/= Pid end, State#state.workers)],
             State#state{workers = Workers, waiting = Empty}
     end.
@@ -374,14 +396,17 @@ add_worker_execute(WorkerPid, CRef, FromPid, Monitors) ->
     MRef = erlang:monitor(process, FromPid),
     true = ets:insert(Monitors, {WorkerPid, CRef, MRef}).
 
-return_worker(lifo, Pid, Workers) -> [Pid | Workers];
-return_worker(fifo, Pid, Workers) -> Workers ++ [Pid].
+return_worker(Pid, Workers) ->
+    List = [Pid | Workers],
+    lists:keysort(3,List)
+.
+
 
 do_reap_workers(UnScanned, _, _, 0, _, Workers, _) ->
     {0, lists:reverse(Workers) ++ UnScanned};
 do_reap_workers([], _, _, Overflow, _, Workers, _) ->
     {Overflow, lists:reverse(Workers)};
-do_reap_workers([Worker = {Pid, LTime} | Rest], Now, TTL, Overflow, Sup, Workers, Strategy) ->
+do_reap_workers([Worker = {Pid, LTime, _} | Rest], Now, TTL, Overflow, Sup, Workers, Strategy) ->
     case Now - LTime > TTL of
         true ->
             ok = dismiss_worker(Sup, Pid),
