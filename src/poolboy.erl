@@ -124,7 +124,7 @@ status(Pool) ->
 
 init({PoolArgs, WorkerArgs}) ->
     process_flag(trap_exit, true),
-    process_flag(priority, high),
+    process_flag(priority, max),
     Waiting = queue:new(),
     Monitors = ets:new(monitors, [private]),
     init(PoolArgs, WorkerArgs, #state{waiting = Waiting, monitors = Monitors}).
