@@ -147,27 +147,12 @@ init([], _WorkerArgs, #state{size = Size, supervisor = Sup} = State) ->
     Workers = prepopulate(Size, Sup),
     {ok, State#state{workers = Workers}}.
 
-handle_cast({checkin, Pid}=Data, State = #state{monitors = Monitors, is_redis = IsRedis}) ->
-    case IsRedis of
-    true ->   file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]);
-    false -> ok
-    end,
+handle_cast({checkin, Pid}, State) ->
+    NewState = handle_checkin(Pid, State),
+    {noreply, NewState}
+;
 
-    case ets:lookup(Monitors, Pid) of
-        [{Pid, _, MRef}] ->
-            true = erlang:demonitor(MRef),
-            true = ets:delete(Monitors, Pid),
-            NewState = handle_checkin(Pid, State),
-            {noreply, NewState};
-        [] ->
-            {noreply, State}
-    end;
-
-handle_cast({cancel_waiting, CRef}=Data, State = #state{is_redis = IsRedis}) ->
-    case IsRedis of
-        true ->   file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]);
-        false -> ok
-    end,
+handle_cast({cancel_waiting, CRef}, State) ->
     case ets:match(State#state.monitors, {'$1', CRef, '$2'}) of
         [[Pid, MRef]] ->
             demonitor(MRef, [flush]),
@@ -188,11 +173,7 @@ handle_cast({cancel_waiting, CRef}=Data, State = #state{is_redis = IsRedis}) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_call({checkout, CRef, Block}=Data, {FromPid, _} = From, State = #state{is_redis = IsRedis}) ->
-    case IsRedis of
-        true ->   file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]);
-        false -> ok
-    end,
+handle_call({checkout, CRef, Block}, {FromPid, _} = From, State) ->
     #state{supervisor = Sup,
            workers = Workers,
            monitors = Monitors,
@@ -200,8 +181,6 @@ handle_call({checkout, CRef, Block}=Data, {FromPid, _} = From, State = #state{is
            max_overflow = MaxOverflow} = State,
     case Workers of
         [Pid | Left] ->
-            MRef = erlang:monitor(process, FromPid),
-            true = ets:insert(Monitors, {Pid, CRef, MRef}),
             {reply, Pid, State#state{workers = Left}};
         [] when MaxOverflow > 0, Overflow < MaxOverflow ->
             {Pid, MRef} = new_worker(Sup, FromPid),
@@ -311,26 +290,14 @@ prepopulate(N, Sup, Workers) ->
     prepopulate(N-1, Sup, [new_worker(Sup) | Workers]).
 
 handle_checkin(Pid, State) ->
-    #state{supervisor = Sup,
-           waiting = Waiting,
-           monitors = Monitors,
-           overflow = Overflow,
-           strategy = Strategy} = State,
-    case queue:out(Waiting) of
-        {{value, {From, CRef, MRef}}, Left} ->
-            true = ets:insert(Monitors, {Pid, CRef, MRef}),
-            gen_server:reply(From, Pid),
-            State#state{waiting = Left};
-        {empty, Empty} when Overflow > 0 ->
-            ok = dismiss_worker(Sup, Pid),
-            State#state{waiting = Empty, overflow = Overflow - 1};
-        {empty, Empty} ->
-            Workers = case Strategy of
-                lifo -> [Pid | State#state.workers];
-                fifo -> State#state.workers ++ [Pid]
-            end,
-            State#state{workers = Workers, waiting = Empty, overflow = 0}
-    end.
+    #state{strategy = Strategy} = State,
+
+    Workers = case Strategy of
+        lifo -> [Pid | State#state.workers];
+        fifo -> State#state.workers ++ [Pid]
+    end,
+    State#state{workers = Workers}
+ .
 
 handle_worker_exit(Pid, State) ->
     #state{supervisor = Sup,
