@@ -56,7 +56,7 @@ checkout(Pool, Block, Timeout) ->
         gen_server:call(Pool, {checkout, CRef, Block}, Timeout)
     catch
         Class:Reason ->
-            gen_server:cast(Pool, {cancel_waiting, CRef}),
+            %gen_server:cast(Pool, {cancel_waiting, CRef}),
             erlang:raise(Class, Reason, erlang:get_stacktrace())
     end.
 
