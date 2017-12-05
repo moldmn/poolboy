@@ -147,7 +147,7 @@ init([], _WorkerArgs, #state{size = Size, supervisor = Sup} = State) ->
     {ok, State#state{workers = Workers}}.
 
 handle_cast({checkin, Pid}=Data, State = #state{monitors = Monitors}) ->
-    file:write_file("poolboy.log", io_lib:fwrite("~p.\n", [Data])),
+    file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]),
     case ets:lookup(Monitors, Pid) of
         [{Pid, _, MRef}] ->
             true = erlang:demonitor(MRef),
@@ -159,7 +159,7 @@ handle_cast({checkin, Pid}=Data, State = #state{monitors = Monitors}) ->
     end;
 
 handle_cast({cancel_waiting, CRef}=Data, State) ->
-    file:write_file("poolboy.log", io_lib:fwrite("~p.\n", [Data])),
+    file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]),
     case ets:match(State#state.monitors, {'$1', CRef, '$2'}) of
         [[Pid, MRef]] ->
             demonitor(MRef, [flush]),
@@ -181,7 +181,7 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_call({checkout, CRef, Block}=Data, {FromPid, _} = From, State) ->
-    file:write_file("poolboy.log", io_lib:fwrite("~p.\n", [Data])),
+    file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]),
     #state{supervisor = Sup,
            workers = Workers,
            monitors = Monitors,
