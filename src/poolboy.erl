@@ -36,7 +36,8 @@
     size = 5 :: non_neg_integer(),
     overflow = 0 :: non_neg_integer(),
     max_overflow = 10 :: non_neg_integer(),
-    strategy = lifo :: lifo | fifo
+    strategy = lifo :: lifo | fifo,
+    is_redis = false :: boolean()
 }).
 
 -spec checkout(Pool :: pool()) -> pid().
@@ -127,7 +128,7 @@ init({PoolArgs, WorkerArgs}) ->
     process_flag(priority, max),
     Waiting = queue:new(),
     Monitors = ets:new(monitors, [private]),
-    init(PoolArgs, WorkerArgs, #state{waiting = Waiting, monitors = Monitors}).
+    init(PoolArgs, WorkerArgs, #state{waiting = Waiting, monitors = Monitors, is_redis = (self() == erlang:whereis(bws_redis_master))}).
 
 init([{worker_module, Mod} | Rest], WorkerArgs, State) when is_atom(Mod) ->
     {ok, Sup} = poolboy_sup:start_link(Mod, WorkerArgs),
@@ -146,8 +147,12 @@ init([], _WorkerArgs, #state{size = Size, supervisor = Sup} = State) ->
     Workers = prepopulate(Size, Sup),
     {ok, State#state{workers = Workers}}.
 
-handle_cast({checkin, Pid}=Data, State = #state{monitors = Monitors}) ->
-    file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]),
+handle_cast({checkin, Pid}=Data, State = #state{monitors = Monitors, is_redis = IsRedis}) ->
+    case IsRedis of
+    true ->   file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]);
+    false -> ok
+    end,
+
     case ets:lookup(Monitors, Pid) of
         [{Pid, _, MRef}] ->
             true = erlang:demonitor(MRef),
@@ -158,8 +163,11 @@ handle_cast({checkin, Pid}=Data, State = #state{monitors = Monitors}) ->
             {noreply, State}
     end;
 
-handle_cast({cancel_waiting, CRef}=Data, State) ->
-    file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]),
+handle_cast({cancel_waiting, CRef}=Data, State = #state{is_redis = IsRedis}) ->
+    case IsRedis of
+        true ->   file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]);
+        false -> ok
+    end,
     case ets:match(State#state.monitors, {'$1', CRef, '$2'}) of
         [[Pid, MRef]] ->
             demonitor(MRef, [flush]),
@@ -180,8 +188,11 @@ handle_cast({cancel_waiting, CRef}=Data, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_call({checkout, CRef, Block}=Data, {FromPid, _} = From, State) ->
-    file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]),
+handle_call({checkout, CRef, Block}=Data, {FromPid, _} = From, State = #state{is_redis = IsRedis}) ->
+    case IsRedis of
+        true ->   file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]);
+        false -> ok
+    end,
     #state{supervisor = Sup,
            workers = Workers,
            monitors = Monitors,
