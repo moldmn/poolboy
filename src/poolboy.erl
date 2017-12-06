@@ -12,11 +12,6 @@
 
 -define(TIMEOUT, 5000).
 
--ifdef(pre17).
--type pid_queue() :: queue().
--else.
--type pid_queue() :: queue:queue().
--endif.
 
 -type pool() ::
     Name :: (atom() | pid()) |
@@ -73,13 +68,14 @@ transaction(Pool, Fun) ->
 -spec transaction(Pool :: pool(), Fun :: fun((Worker :: pid()) -> any()),
     Timeout :: timeout()) -> any().
 transaction(Pool, Fun, Timeout) ->
-    file:write_file("poolboy.log", io_lib:fwrite("~p: transaction checkout\n", [self()]), [append]),
+    %file:write_file("poolboy.log", io_lib:fwrite("~p: transaction checkout\n", [self()]), [append]),
     Worker = poolboy:checkout(Pool, true, Timeout),
-    file:write_file("poolboy.log", io_lib:fwrite("~p: transaction Fun(Worker)\n", [self()]), [append]),
+    %file:write_file("poolboy.log", io_lib:fwrite("~p: transaction Fun(Worker)\n", [self()]), [append]),
     try
         Fun(Worker)
     after
-        file:write_file("poolboy.log", io_lib:fwrite("~p: transaction after\n", [self()]), [append])
+        ok
+        %file:write_file("poolboy.log", io_lib:fwrite("~p: transaction after\n", [self()]), [append])
         %ok = poolboy:checkin(Pool, Worker)
     end.
 
@@ -172,11 +168,11 @@ handle_cast({cancel_waiting, CRef}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_call({checkout, _CRef, _Block}=Data, {_FromPid, _} = _From, State = #state{is_redis = IsRedis}) ->
-    case IsRedis of
-        true ->   file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]);
-        false -> ok
-    end,
+handle_call({checkout, _CRef, _Block}=_Data, {_FromPid, _} = _From, State = #state{is_redis = _IsRedis}) ->
+    %case IsRedis of
+    %    true ->   file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]);
+    %    false -> ok
+    %end,
 
     #state{workers = Workers} = State,
     case Workers of
@@ -187,11 +183,11 @@ handle_call({checkout, _CRef, _Block}=Data, {_FromPid, _} = _From, State = #stat
             {reply, error, State}
     end;
 
-handle_call({checkin, Pid}=Data, _From, State = #state{is_redis = IsRedis}) ->
-    case IsRedis of
-        true ->   file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]);
-        false -> ok
-    end,
+handle_call({checkin, Pid}=_Data, _From, State = #state{is_redis = _IsRedis}) ->
+    %case IsRedis of
+    %    true ->   file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]);
+    %    false -> ok
+    %end,
     NewState = handle_checkin(Pid, State),
     {reply, ok, NewState}
 ;
@@ -272,14 +268,6 @@ new_worker(Sup) ->
     true = link(Pid),
     Pid.
 
-new_worker(Sup, FromPid) ->
-    Pid = new_worker(Sup),
-    Ref = erlang:monitor(process, FromPid),
-    {Pid, Ref}.
-
-dismiss_worker(Sup, Pid) ->
-    true = unlink(Pid),
-    supervisor:terminate_child(Sup, Pid).
 
 prepopulate(N, _Sup) when N < 1 ->
     [];
