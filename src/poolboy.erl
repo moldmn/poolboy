@@ -192,7 +192,7 @@ handle_call({checkin, Pid}=Data, _From, State = #state{is_redis = IsRedis}) ->
         false -> ok
     end,
     NewState = handle_checkin(Pid, State),
-    {noreply, NewState}
+    {reply, ok, NewState}
 ;
 
 handle_call(status, _From, State) ->
