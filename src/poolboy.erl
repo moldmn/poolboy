@@ -62,7 +62,7 @@ checkout(Pool, Block, Timeout) ->
 
 -spec checkin(Pool :: pool(), Worker :: pid()) -> ok.
 checkin(Pool, Worker) when is_pid(Worker) ->
-    gen_server:cast(Pool, {checkin, Worker}).
+    gen_server:call(Pool, {checkin, Worker}).
 
 -spec transaction(Pool :: pool(), Fun :: fun((Worker :: pid()) -> any()))
     -> any().
@@ -150,15 +150,6 @@ init([], _WorkerArgs, #state{size = Size, supervisor = Sup} = State) ->
     Workers = prepopulate(Size, Sup),
     {ok, State#state{workers = Workers}}.
 
-handle_cast({checkin, Pid}=Data, State = #state{is_redis = IsRedis}) ->
-    case IsRedis of
-        true ->   file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]);
-        false -> ok
-    end,
-    NewState = handle_checkin(Pid, State),
-    {noreply, NewState}
-;
-
 handle_cast({cancel_waiting, CRef}, State) ->
     case ets:match(State#state.monitors, {'$1', CRef, '$2'}) of
         [[Pid, MRef]] ->
@@ -194,6 +185,15 @@ handle_call({checkout, _CRef, _Block}=Data, {_FromPid, _} = _From, State = #stat
         [] ->
             {reply, error, State}
     end;
+
+handle_call({checkin, Pid}=Data, _From, State = #state{is_redis = IsRedis}) ->
+    case IsRedis of
+        true ->   file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]);
+        false -> ok
+    end,
+    NewState = handle_checkin(Pid, State),
+    {noreply, NewState}
+;
 
 handle_call(status, _From, State) ->
     #state{workers = Workers,
