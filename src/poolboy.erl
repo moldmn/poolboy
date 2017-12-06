@@ -72,10 +72,13 @@ transaction(Pool, Fun) ->
 -spec transaction(Pool :: pool(), Fun :: fun((Worker :: pid()) -> any()),
     Timeout :: timeout()) -> any().
 transaction(Pool, Fun, Timeout) ->
+    file:write_file("poolboy.log", io_lib:fwrite("~p: transaction checkout\n", [self()]), [append]),
     Worker = poolboy:checkout(Pool, true, Timeout),
+    file:write_file("poolboy.log", io_lib:fwrite("~p: transaction Fun(Worker)\n", [self()]), [append]),
     try
         Fun(Worker)
     after
+        file:write_file("poolboy.log", io_lib:fwrite("~p: transaction checkin\n", [self()]), [append]),
         ok = poolboy:checkin(Pool, Worker)
     end.
 
@@ -147,7 +150,11 @@ init([], _WorkerArgs, #state{size = Size, supervisor = Sup} = State) ->
     Workers = prepopulate(Size, Sup),
     {ok, State#state{workers = Workers}}.
 
-handle_cast({checkin, Pid}, State) ->
+handle_cast({checkin, Pid}=Data, State = #state{is_redis = IsRedis}) ->
+    case IsRedis of
+        true ->   file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]);
+        false -> ok
+    end,
     NewState = handle_checkin(Pid, State),
     {noreply, NewState}
 ;
@@ -173,7 +180,12 @@ handle_cast({cancel_waiting, CRef}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_call({checkout, _CRef, _Block}, {_FromPid, _} = _From, State) ->
+handle_call({checkout, _CRef, _Block}=Data, {_FromPid, _} = _From, State = #state{is_redis = IsRedis}) ->
+    case IsRedis of
+        true ->   file:write_file("poolboy.log", io_lib:fwrite("~p: ~p.\n", [self(),Data]), [append]);
+        false -> ok
+    end,
+
     #state{workers = Workers} = State,
     case Workers of
         [Pid | Left] ->
