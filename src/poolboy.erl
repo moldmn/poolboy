@@ -173,25 +173,14 @@ handle_cast({cancel_waiting, CRef}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_call({checkout, CRef, Block}, {FromPid, _} = From, State) ->
-    #state{supervisor = Sup,
-           workers = Workers,
-           monitors = Monitors,
-           overflow = Overflow,
-           max_overflow = MaxOverflow} = State,
+handle_call({checkout, _CRef, _Block}, {_FromPid, _} = _From, State) ->
+    #state{workers = Workers} = State,
     case Workers of
         [Pid | Left] ->
-            {reply, Pid, State#state{workers = Left}};
-        [] when MaxOverflow > 0, Overflow < MaxOverflow ->
-            {Pid, MRef} = new_worker(Sup, FromPid),
-            true = ets:insert(Monitors, {Pid, CRef, MRef}),
-            {reply, Pid, State#state{overflow = Overflow + 1}};
-        [] when Block =:= false ->
-            {reply, full, State};
+            {reply, Pid, State#state{workers = Left}}
+        ;
         [] ->
-            MRef = erlang:monitor(process, FromPid),
-            Waiting = queue:in({From, CRef, MRef}, State#state.waiting),
-            {noreply, State#state{waiting = Waiting}}
+            {reply, error, State}
     end;
 
 handle_call(status, _From, State) ->
