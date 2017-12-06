@@ -26,7 +26,7 @@
 -record(state, {
     supervisor :: pid(),
     workers :: [pid()],
-    waiting :: pid_queue(),
+    waiting,
     monitors :: ets:tid(),
     size = 5 :: non_neg_integer(),
     overflow = 0 :: non_neg_integer(),
