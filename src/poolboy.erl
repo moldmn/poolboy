@@ -78,8 +78,8 @@ transaction(Pool, Fun, Timeout) ->
     try
         Fun(Worker)
     after
-        file:write_file("poolboy.log", io_lib:fwrite("~p: transaction checkin\n", [self()]), [append]),
-        ok = poolboy:checkin(Pool, Worker)
+        file:write_file("poolboy.log", io_lib:fwrite("~p: transaction after\n", [self()]), [append])
+        %ok = poolboy:checkin(Pool, Worker)
     end.
 
 -spec child_spec(PoolId :: term(), PoolArgs :: proplists:proplist())
@@ -180,7 +180,7 @@ handle_call({checkout, _CRef, _Block}=Data, {_FromPid, _} = _From, State = #stat
     #state{workers = Workers} = State,
     case Workers of
         [Pid | Left] ->
-            {reply, Pid, State#state{workers = Left}}
+            {reply, Pid, State#state{workers = Left ++ [Pid]}}
         ;
         [] ->
             {reply, error, State}
