@@ -61,8 +61,9 @@ checkout(Pool, Block, Timeout) ->
     end.
 
 -spec checkin(Pool :: pool(), Worker :: pid()) -> ok.
-checkin(Pool, Worker) when is_pid(Worker) ->
-    gen_server:call(Pool, {checkin, Worker}).
+checkin(_Pool, Worker) when is_pid(Worker) ->
+    ok.
+    %gen_server:call(Pool, {checkin, Worker}).
 
 -spec transaction(Pool :: pool(), Fun :: fun((Worker :: pid()) -> any()))
     -> any().
